@@ -38,8 +38,12 @@ COPY --from=builder --chown=nodeapp:nodejs /app/dist           ./dist
 COPY --from=builder --chown=nodeapp:nodejs /app/node_modules    ./node_modules
 COPY --from=builder --chown=nodeapp:nodejs /app/package.json    ./
 COPY --from=builder --chown=nodeapp:nodejs /app/drizzle         ./drizzle
-COPY --from=builder --chown=nodeapp:nodejs /app/src/data        ./src/data
-COPY --from=builder --chown=nodeapp:nodejs /app/src/locales     ./src/locales
+
+# YAML and JSON data files aren't picked up by `tsc`, so the runtime layer
+# copies them alongside the compiled JS where i18n.ts and seed-personas
+# resolve them via `new URL('../data/personas.yaml', import.meta.url)`.
+COPY --from=builder --chown=nodeapp:nodejs /app/src/data        ./dist/data
+COPY --from=builder --chown=nodeapp:nodejs /app/src/locales     ./dist/locales
 
 USER nodeapp
 
@@ -49,7 +53,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
   CMD wget --quiet --tries=1 --spider http://localhost:8080/ready || exit 1
 
-# [AUDIT-M5] Auto-migrate on container start. Drizzle migrations are
-# idempotent so this is safe on every boot.
-# scripts/seed-personas.ts arrives in Week 3; left out of the CMD until then.
-CMD ["sh", "-c", "node dist/scripts/migrate.js && node dist/main.js"]
+# [AUDIT-M5] Auto-migrate + seed on container start. Both are idempotent so
+# this is safe on every boot.
+CMD ["sh", "-c", "node dist/scripts/migrate.js && node dist/scripts/seed-personas.js && node dist/main.js"]

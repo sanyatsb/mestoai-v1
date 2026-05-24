@@ -13,8 +13,10 @@ import type { User } from '../db/schema.js';
 import type { ConversationService } from '../services/conversation.js';
 import type { GonkaClient } from '../services/gonka-client.js';
 import type { I18nService } from '../services/i18n.js';
+import type { PersonaService } from '../services/persona.js';
 import type { RateLimiter } from '../services/rate-limiter.js';
 import type { UsersService } from '../services/users.js';
+import type { VoiceService } from '../services/voice.js';
 import type { Logger, Tokenizer } from '../types.js';
 
 // Empty session — we keep session state in the DB, not in grammY's in-memory
@@ -36,6 +38,8 @@ export interface BotServices {
   tokenizer: Tokenizer;
   users: UsersService;
   i18n: I18nService;
+  persona: PersonaService;
+  voice: VoiceService;
 }
 
 export interface CustomCtx {

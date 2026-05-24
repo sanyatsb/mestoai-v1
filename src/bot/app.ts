@@ -16,7 +16,9 @@ import { env } from '../config.js';
 import { chatComposer } from './composers/chat.js';
 import { helpComposer } from './composers/help.js';
 import { newComposer } from './composers/new.js';
+import { personaComposer } from './composers/persona.js';
 import { startComposer } from './composers/start.js';
+import { voiceComposer } from './composers/voice.js';
 import type { BotServices, MyContext } from './context.js';
 import { authMiddleware } from './middlewares/auth.js';
 import { i18nMiddleware } from './middlewares/i18n.js';
@@ -32,10 +34,12 @@ export function createBot(services: BotServices): Bot<MyContext> {
   bot.use(i18nMiddleware);
   bot.use(authMiddleware);
 
-  // ---- command composers (run BEFORE chat catch-all) ----
+  // ---- command + callback composers (run BEFORE chat catch-all) ----
   bot.use(startComposer);
   bot.use(helpComposer);
   bot.use(newComposer);
+  bot.use(personaComposer);
+  bot.use(voiceComposer);
 
   // ---- catch-all for plain text in private chats ----
   bot.use(chatComposer);

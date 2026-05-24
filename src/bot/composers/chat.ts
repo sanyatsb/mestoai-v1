@@ -1,19 +1,23 @@
 // chat composer — the main text-in-DM handler.
 //
-// Week 2 scope: rate-limit → length check → conversation + Kimi via Gonka,
-// streamed into a hidden typing-indicator → reveal final text only after
-// the stream completes [AUDIT-C7] → persist + (later) cost tracking.
+// runTextPipeline is the reusable core: voice composer hands a transcribed
+// string straight back into it so we don't fork the pipeline.
 //
-// Week 3 adds voice output and persona-rendered system prompts.
-// Week 4 adds attached-document handling (already supported by
-// ConversationService but no documents are attached yet in MVP code paths
-// before Week 4).
-// Week 6 adds input/output moderation and rolls in the audit log.
+// Week 3 additions vs Week 2:
+//   - PersonaService renders the system prompt (with ALWAYS respond in:
+//     [AUDIT-L14]) and the active persona is loaded from the DB row.
+//   - Voice output (Edge-TTS) when user.voiceOutputEnabled is on and we're
+//     in a private chat [AUDIT-N3]. TTS failures are non-fatal — text reply
+//     still goes out.
+//
+// Week 6 will add input/output moderation; Week 7A wires cost-tracker.
 
-import { Composer } from 'grammy';
+import { Composer, InputFile } from 'grammy';
 import { env } from '../../config.js';
 import type { ChatMessage } from '../../services/conversation.js';
+import type { Persona } from '../../services/persona.js';
 import { createTypingIndicatorSink } from '../../services/streaming-sink.js';
+import { toPersonaId } from '../../utils/ids.js';
 import { splitForTelegram } from '../../utils/telegram-split.js';
 import type { MyContext } from '../context.js';
 
@@ -26,17 +30,20 @@ chatComposer.chatType('private').on('message:text', async (ctx, next) => {
     // Commands have their own composers; defer.
     return next();
   }
-  await handleTextMessage(ctx);
+  await runTextPipeline(ctx, ctx.message.text);
 });
 
-async function handleTextMessage(ctx: MyContext): Promise<void> {
+/**
+ * Shared text pipeline. Used directly for text messages and by voice
+ * composer after transcription.
+ */
+export async function runTextPipeline(ctx: MyContext, text: string): Promise<void> {
   const user = ctx.user;
   if (!user) {
     ctx.logger.error('chat_handler_without_user');
     return;
   }
-  const text = ctx.message?.text ?? '';
-  const { gonka, rateLimit, conversation, tokenizer } = ctx.services;
+  const { gonka, rateLimit, conversation, tokenizer, persona, voice } = ctx.services;
 
   // [AUDIT-H4] counter increments even on reject — that's the design.
   const rl = await rateLimit.checkAndIncrement(user.id as never, 'text');
@@ -56,7 +63,7 @@ async function handleTextMessage(ctx: MyContext): Promise<void> {
     return;
   }
 
-  // Week 6 will add input moderation here, before we touch the LLM.
+  // Week 6 will add input moderation here.
 
   const conv = await conversation.getOrCreateActive(user.id as never);
 
@@ -67,9 +74,15 @@ async function handleTextMessage(ctx: MyContext): Promise<void> {
     ...(ctx.message?.message_id !== undefined ? { tgMessageId: ctx.message.message_id } : {}),
   });
 
-  // Week 2 system prompt is intentionally generic — PersonaService lands
-  // in Week 3 along with renderSystemPrompt().
-  const systemPrompt = buildWeek2SystemPrompt(ctx.lang);
+  // Resolve active persona: conversation override → user default → DB default.
+  const activePersona = await resolveActivePersona(ctx, conv.personaId, user.activePersonaId);
+
+  const systemPrompt = persona.renderSystemPrompt({
+    persona: activePersona,
+    userLang: ctx.lang,
+    ...(conv.documentText ? { documentText: conv.documentText } : {}),
+    ...(conv.documentName ? { documentName: conv.documentName } : {}),
+  });
   const systemTokens = tokenizer.estimate(systemPrompt);
 
   const historyResult = await conversation.getMessagesForLlm({
@@ -77,10 +90,9 @@ async function handleTextMessage(ctx: MyContext): Promise<void> {
     reservedForSystem: systemTokens,
   });
   if (!historyResult.ok) {
-    // [AUDIT-A5] Document overflow — but Week 2 has no documents, so this
-    // path is purely defensive.
+    // [AUDIT-A5] Document overflow — possible from Week 4 onward.
     await ctx.reply(ctx.t('error.internal'));
-    ctx.logger.error({ err: historyResult.error }, 'context_overflow_unexpected_in_week2');
+    ctx.logger.error({ err: historyResult.error }, 'context_overflow');
     return;
   }
 
@@ -108,9 +120,8 @@ async function handleTextMessage(ctx: MyContext): Promise<void> {
             usageDegraded: false,
           };
         } else {
-          // [AUDIT-L13] Fallback: estimate via tiktoken and flag the metric
-          // so dashboards can highlight degraded cost accuracy.
-          ctx.logger.warn({ userId: user.id }, 'gateway_usage_missing_falling_back_to_tiktoken');
+          // [AUDIT-L13] Fallback: estimate via tiktoken and flag the metric.
+          ctx.logger.warn({ userId: user.id }, 'gateway_usage_missing_falling_back');
           finalUsage = {
             tokensInput: tokenizer.estimate(JSON.stringify(llmMessages)),
             tokensOutput: tokenizer.estimate(accumulated),
@@ -135,9 +146,7 @@ async function handleTextMessage(ctx: MyContext): Promise<void> {
 
   // Week 6: output moderation goes RIGHT HERE — before sink.commit.
 
-  // [AUDIT-A4] Telegram caps messages at 4096 chars — split on natural
-  // breaks. First part replaces the typing indicator; the rest are sent as
-  // follow-up replies.
+  // [AUDIT-A4] Telegram caps messages at 4096 chars.
   const parts = splitForTelegram(accumulated, 4000);
   let firstTgMessageId: number | null = null;
   for (let i = 0; i < parts.length; i += 1) {
@@ -164,19 +173,39 @@ async function handleTextMessage(ctx: MyContext): Promise<void> {
       : null,
   });
 
-  // Cost tracking lands in Week 7A — for now the per-message costUsd column
-  // already captures the spend.
+  // [AUDIT-N3] Voice output ONLY in private DMs, never groups. Also cap on
+  // length — TTS for 4K-char essays is wasteful and Telegram has its own
+  // duration limits.
+  if (user.voiceOutputEnabled && ctx.chat?.type === 'private' && accumulated.length <= 2000) {
+    const result = await voice.synthesize(accumulated, ctx.lang);
+    if (result.ok) {
+      try {
+        await ctx.replyWithVoice(new InputFile(result.value, 'response.ogg'));
+      } catch (e) {
+        ctx.logger.warn({ err: e }, 'voice_reply_failed');
+      }
+    } else {
+      ctx.logger.warn({ err: result.error }, 'tts_failed_non_fatal');
+    }
+  }
 }
 
 /**
- * Week 2 placeholder system prompt. Week 3's PersonaService replaces this
- * with the active persona's prompt + [AUDIT-L14] explicit language pinning.
+ * Resolve which persona is active for this turn. Precedence:
+ *   1. The conversation's own personaId (set when /persona started it).
+ *   2. The user's activePersonaId.
+ *   3. The DB default persona.
  */
-function buildWeek2SystemPrompt(userLang: string): string {
-  return [
-    'You are a helpful, friendly AI assistant powered by Kimi K2.6 on the Gonka decentralized network.',
-    'Be concise but complete. Avoid disclaimers unless safety-relevant.',
-    'Refuse harmful, illegal, or unethical requests politely.',
-    `\nALWAYS respond in: ${userLang}`,
-  ].join(' ');
+async function resolveActivePersona(
+  ctx: MyContext,
+  convPersonaId: number | null,
+  userPersonaId: number | null,
+): Promise<Persona> {
+  const candidate = convPersonaId ?? userPersonaId;
+  if (candidate != null) {
+    const p = await ctx.services.persona.getById(toPersonaId(candidate));
+    if (p) return p;
+    ctx.logger.warn({ candidate }, 'active_persona_missing_falling_back_to_default');
+  }
+  return ctx.services.persona.getDefault();
 }

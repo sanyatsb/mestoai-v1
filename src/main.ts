@@ -9,13 +9,16 @@ import { env } from './config.js';
 import { createDb } from './db/client.js';
 import { createConversationsRepository } from './db/repositories/conversations.js';
 import { createMessagesRepository } from './db/repositories/messages.js';
+import { createPersonasRepository } from './db/repositories/personas.js';
 import { createUsersRepository } from './db/repositories/users.js';
 import { createServer } from './http/server.js';
 import { createConversationService } from './services/conversation.js';
 import { createGonkaClient } from './services/gonka-client.js';
 import { createI18nService } from './services/i18n.js';
+import { createPersonaService } from './services/persona.js';
 import { createRateLimiter } from './services/rate-limiter.js';
 import { createUsersService } from './services/users.js';
+import { createVoiceService } from './services/voice.js';
 import { logger } from './utils/logger.js';
 import { createTokenizer } from './utils/tokenizer.js';
 
@@ -34,6 +37,7 @@ async function main(): Promise<void> {
   const usersRepo = createUsersRepository(dbHandle.db);
   const conversationsRepo = createConversationsRepository(dbHandle.db);
   const messagesRepo = createMessagesRepository(dbHandle.db);
+  const personasRepo = createPersonasRepository(dbHandle.db);
 
   // ---- services ----
   const tokenizer = createTokenizer();
@@ -63,6 +67,12 @@ async function main(): Promise<void> {
     maxRetries: env.GONKA_MAX_RETRIES,
     logger,
   });
+  const persona = createPersonaService({ personas: personasRepo, logger });
+  const voice = createVoiceService({
+    openaiApiKey: env.OPENAI_API_KEY,
+    whisperModel: env.OPENAI_WHISPER_MODEL,
+    logger,
+  });
 
   const services: BotServices = {
     gonka,
@@ -71,6 +81,8 @@ async function main(): Promise<void> {
     tokenizer,
     users,
     i18n,
+    persona,
+    voice,
   };
 
   // ---- bot ----
