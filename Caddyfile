@@ -1,0 +1,24 @@
+# Replace the hostname with your real domain before going to production.
+# Caddy will auto-provision a Let's Encrypt cert.
+
+bot.yourdomain.com {
+    reverse_proxy bot:8080 {
+        # [AUDIT-C10] Forward Telegram's secret token header to grammY's
+        # webhookCallback validator.
+        header_up X-Telegram-Bot-Api-Secret-Token {http.request.header.X-Telegram-Bot-Api-Secret-Token}
+    }
+
+    encode gzip
+
+    # [AUDIT-L8] Security headers.
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options    "nosniff"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

@@ -1,0 +1,19 @@
+# pnpm 11+ moved several package.json#pnpm.* settings here.
+# https://pnpm.io/settings
+#
+# allowBuilds whitelists install-scripts. Anything set to `false` (or absent)
+# is sandboxed and pnpm prints ERR_PNPM_IGNORED_BUILDS — the install itself
+# still succeeds. We only enable scripts we genuinely need:
+#   biome     — postinstall to wire the platform-specific binary
+#   esbuild   — postinstall for the native binary (used by tsx + vitest)
+#   msedge-tts — needs its install hook for Week 3 voice synthesis
+# Everything else is transitive from testcontainers and stays disabled.
+
+allowBuilds:
+  '@biomejs/biome': true
+  esbuild: true
+  msedge-tts: true
+  canvas: false
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
