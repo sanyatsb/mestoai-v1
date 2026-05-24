@@ -1,28 +1,12 @@
-// [AUDIT-X10] i18n middleware (Week 1 stub).
-//
-// Sets ctx.lang to a sensible default and provides a passthrough `t()` that
-// returns the key itself. Real localization with JSON locales arrives in
-// Week 2 — that version of this middleware will load locales, resolve the
-// user's preferred lang, and substitute {params}.
+// [AUDIT-X10] i18n middleware. Runs after services-injector so it can pull
+// the real I18nService out of ctx.services.
 
 import type { MiddlewareFn } from 'grammy';
-import type { MyContext, SupportedLang } from '../context.js';
-
-const SUPPORTED: ReadonlySet<SupportedLang> = new Set(['en', 'ru', 'es', 'ar', 'zh', 'de']);
-
-function resolveLang(tgLang: string | undefined): SupportedLang {
-  if (!tgLang) return 'en';
-  const base = tgLang.split('-')[0]?.toLowerCase();
-  if (base && (SUPPORTED as Set<string>).has(base)) return base as SupportedLang;
-  return 'en';
-}
+import type { MyContext } from '../context.js';
 
 export const i18nMiddleware: MiddlewareFn<MyContext> = async (ctx, next) => {
-  ctx.lang = resolveLang(ctx.from?.language_code);
-  // Week 1 stub: t() returns the key itself (no locales loaded yet).
-  ctx.t = (key, params) => {
-    if (!params) return key;
-    return `${key} ${JSON.stringify(params)}`;
-  };
+  const i18n = ctx.services.i18n;
+  ctx.lang = i18n.resolveLang(ctx.from?.language_code);
+  ctx.t = (key, params) => i18n.t(key, ctx.lang, params);
   return next();
 };

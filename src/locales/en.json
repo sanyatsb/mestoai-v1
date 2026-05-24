@@ -1,0 +1,9 @@
+{
+  "welcome.text": "Hi! I'm Gonka Bot, an AI assistant powered by Kimi K2.6 on the Gonka decentralized network. Just send me a message to start chatting.",
+  "help.text": "Available commands:\n/start — restart the bot\n/help — show this message\n/new — clear the current conversation and start fresh",
+  "rate_limit.text": "Daily limit reached ({current}/{limit}). Try again in ~{hours}h.",
+  "error.message_too_long": "Your message is too long (max {limit} characters).",
+  "error.service_unavailable": "Service is overloaded right now. Please try again in a minute.",
+  "error.internal": "Something went wrong on my side. Try again or run /new.",
+  "new_conversation.confirmed": "Started a new conversation. Previous context cleared."
+}

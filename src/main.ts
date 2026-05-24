@@ -1,73 +1,99 @@
-// Entry point.
-//
-// Week 1 lifecycle:
-//   1. Validate env (already done at config.ts import).
-//   2. Connect Postgres + Redis.
-//   3. Build the bot (composers + middlewares).
-//   4. Start Hono HTTP server (with /health, /ready, /webhook).
-//   5. In dev: poll (bot.start) for instant feedback without ngrok.
-//      In prod: rely on Telegram webhook → POST /webhook.
-//   6. Wire SIGINT/SIGTERM for graceful shutdown.
-//
-// Later weeks add: services injector middleware (Week 2+), node-cron tasks
-// (Week 6+), webhook registration via scripts/set-webhook.ts (Week 7B).
+// Entry point. Composition root — builds services once, injects them into
+// the bot via middleware, then starts the HTTP server and (in dev) polling.
 
 import { serve } from '@hono/node-server';
 import { Redis } from 'ioredis';
 import { createBot } from './bot/app.js';
+import type { BotServices } from './bot/context.js';
 import { env } from './config.js';
 import { createDb } from './db/client.js';
+import { createConversationsRepository } from './db/repositories/conversations.js';
+import { createMessagesRepository } from './db/repositories/messages.js';
+import { createUsersRepository } from './db/repositories/users.js';
 import { createServer } from './http/server.js';
+import { createConversationService } from './services/conversation.js';
+import { createGonkaClient } from './services/gonka-client.js';
+import { createI18nService } from './services/i18n.js';
+import { createRateLimiter } from './services/rate-limiter.js';
+import { createUsersService } from './services/users.js';
 import { logger } from './utils/logger.js';
+import { createTokenizer } from './utils/tokenizer.js';
 
 async function main(): Promise<void> {
   logger.info({ nodeEnv: env.NODE_ENV, port: env.PORT }, 'bootstrap_start');
 
   // ---- storage ----
-  const {
-    db: _db,
-    sql,
-    ping: pingDb,
-    close: closeDb,
-  } = createDb({
-    url: env.DATABASE_URL,
-    logger,
-  });
-  // Keep a reference; _db will be passed to services in Week 2+.
-  void _db;
-  void sql;
-
+  const dbHandle = createDb({ url: env.DATABASE_URL, logger });
   const redis = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: 3,
     lazyConnect: false,
   });
   redis.on('error', (e) => logger.error({ err: e }, 'redis_error'));
 
+  // ---- repositories ----
+  const usersRepo = createUsersRepository(dbHandle.db);
+  const conversationsRepo = createConversationsRepository(dbHandle.db);
+  const messagesRepo = createMessagesRepository(dbHandle.db);
+
+  // ---- services ----
+  const tokenizer = createTokenizer();
+  const i18n = createI18nService(logger);
+  const users = createUsersService({ users: usersRepo, logger });
+  const conversation = createConversationService({
+    db: dbHandle.db,
+    conversations: conversationsRepo,
+    messages: messagesRepo,
+    tokenizer,
+    logger,
+  });
+  const rateLimit = createRateLimiter({
+    redis,
+    limits: {
+      text: env.RATE_LIMIT_TEXT_PER_DAY,
+      voice: env.RATE_LIMIT_VOICE_PER_DAY,
+      document: env.RATE_LIMIT_DOCUMENT_PER_DAY,
+    },
+    logger,
+  });
+  const gonka = createGonkaClient({
+    baseUrl: env.GONKA_GATEWAY_URL,
+    apiKey: env.GONKA_API_KEY,
+    model: env.GONKA_MODEL,
+    timeoutMs: env.GONKA_TIMEOUT_MS,
+    maxRetries: env.GONKA_MAX_RETRIES,
+    logger,
+  });
+
+  const services: BotServices = {
+    gonka,
+    conversation,
+    rateLimit,
+    tokenizer,
+    users,
+    i18n,
+  };
+
   // ---- bot ----
-  const bot = createBot();
+  const bot = createBot(services);
   await bot.init();
   logger.info({ botUsername: bot.botInfo.username }, 'bot_initialized');
 
   // ---- http ----
   const app = createServer({
     bot,
-    readiness: { pingDb, redis, logger },
+    readiness: { pingDb: dbHandle.ping, redis, logger },
     logger,
   });
   const httpServer = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
     logger.info({ port: info.port }, 'http_listening');
   });
 
-  // ---- bot transport: polling in dev, webhook in prod ----
+  // ---- bot transport ----
   if (env.NODE_ENV === 'development') {
-    // In dev: poll for instant local testing without ngrok.
     bot.start({
-      onStart: (botInfo) => {
-        logger.info({ username: botInfo.username }, 'polling_started');
-      },
+      onStart: (botInfo) => logger.info({ username: botInfo.username }, 'polling_started'),
     });
   } else {
-    // In prod the webhook is registered separately via scripts/set-webhook.ts.
     logger.info('webhook_mode — POST /webhook should be reachable from Telegram');
   }
 
@@ -81,7 +107,7 @@ async function main(): Promise<void> {
     }
     httpServer.close();
     await redis.quit().catch((e) => logger.warn({ err: e }, 'redis_quit_failed'));
-    await closeDb().catch((e) => logger.warn({ err: e }, 'db_close_failed'));
+    await dbHandle.close().catch((e) => logger.warn({ err: e }, 'db_close_failed'));
     logger.info('shutdown_complete');
     process.exit(0);
   };

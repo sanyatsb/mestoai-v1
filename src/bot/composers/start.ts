@@ -1,6 +1,6 @@
-// /start composer — Week 1 stub.
+// /start composer — Week 2 stub.
 //
-// Real ToS + age gate + welcome flow lands in Week 7A.
+// Week 7A wires the full ToS + age-gate + welcome flow on top of this.
 
 import { Composer } from 'grammy';
 import type { MyContext } from '../context.js';
@@ -8,6 +8,6 @@ import type { MyContext } from '../context.js';
 export const startComposer = new Composer<MyContext>();
 
 startComposer.command('start', async (ctx) => {
-  ctx.logger.info({ tgUserId: ctx.from?.id }, '/start invoked (week 1 stub)');
-  await ctx.reply('Hello, world! 👋 (week 1 skeleton)');
+  ctx.logger.info({ tgUserId: ctx.from?.id }, '/start invoked');
+  await ctx.reply(ctx.t('welcome.text'));
 });

@@ -1,18 +1,21 @@
 // [AUDIT-X4, X5, X6, X9] MyContext — single shape passed through every
 // middleware and composer.
 //
-// Week 1 stub: only logger / traceId / a placeholder `services` namespace.
-// Real services are added per-week (see TZ §15):
-//   Week 2: gonka, conversation, rateLimit, tokenizer, users
+// Services land per-week (see TZ §15):
+//   Week 2: gonka, conversation, rateLimit, tokenizer, users, i18n
 //   Week 3: voice, persona
 //   Week 4: document
 //   Week 6: moderation, userReports
 //   Week 7A: cost
-// i18n and `t()` are introduced in Week 2 along with the i18n middleware.
 
 import type { Context, SessionFlavor } from 'grammy';
 import type { User } from '../db/schema.js';
-import type { Logger } from '../types.js';
+import type { ConversationService } from '../services/conversation.js';
+import type { GonkaClient } from '../services/gonka-client.js';
+import type { I18nService } from '../services/i18n.js';
+import type { RateLimiter } from '../services/rate-limiter.js';
+import type { UsersService } from '../services/users.js';
+import type { Logger, Tokenizer } from '../types.js';
 
 // Empty session — we keep session state in the DB, not in grammY's in-memory
 // session. Record<string, never> communicates "object with no keys" without
@@ -23,17 +26,16 @@ export type SessionData = Record<string, never>;
 export type SupportedLang = 'en' | 'ru' | 'es' | 'ar' | 'zh' | 'de';
 
 /**
- * Lazy injection target — every service registered here gets autocompleted
- * inside handlers as `ctx.services.foo`. Week 1 ships nothing concrete yet
- * (placeholders only); each later week fills the corresponding slot.
- *
- * Empty interface is intentional — composers extend it later via module
- * augmentation if needed.
+ * All services made available to composers via ctx.services.
+ * Optional fields are populated only once the corresponding week ships.
  */
 export interface BotServices {
-  // Filled in later weeks. Marker prop keeps the interface non-empty so
-  // structural type checks behave predictably.
-  readonly _placeholder?: never;
+  gonka: GonkaClient;
+  conversation: ConversationService;
+  rateLimit: RateLimiter;
+  tokenizer: Tokenizer;
+  users: UsersService;
+  i18n: I18nService;
 }
 
 export interface CustomCtx {
