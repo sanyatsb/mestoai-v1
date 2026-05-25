@@ -87,6 +87,11 @@ const EnvSchema = z.object({
   FEATURE_VOICE_OUTPUT: boolFromEnv.default('true'),
   FEATURE_DOCUMENTS: boolFromEnv.default('true'),
   FEATURE_GROUPS: boolFromEnv.default('true'),
+  // Skip the input/output OpenAI Moderation calls entirely when false.
+  // Useful in dev where the OpenAI key is rate-limited (429 fail-open
+  // still adds 4-5s per call). Production should keep this true so
+  // jailbreak / blacklist / category thresholds keep firing.
+  FEATURE_MODERATION: boolFromEnv.default('true'),
   KILL_SWITCH: boolFromEnv.default('false'),
   // Toggle between TypingIndicatorSink (false — [AUDIT-C7] safe) and
   // StreamingEditSink (true — UX win on fast models, see streaming-sink.ts).

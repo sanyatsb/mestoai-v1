@@ -92,9 +92,23 @@ export interface ModerationServiceDeps {
   bot: BotApiHandle;
   adminChatId: number;
   logger: Logger;
+  /**
+   * Master kill-switch for the whole moderation pipeline. When false,
+   * checkInput/checkOutput return ALLOW immediately without any HTTP call,
+   * blacklist match, or jailbreak detection. Intended for dev/local
+   * environments where the OpenAI key is rate-limited; production should
+   * keep this true.
+   */
+  enabled: boolean;
 }
 
 export function createModerationService(deps: ModerationServiceDeps): ModerationService {
+  if (!deps.enabled) {
+    deps.logger.warn('moderation_disabled — every check will return ALLOW');
+    const allow = async () => ALLOW;
+    return { checkInput: allow, checkOutput: allow };
+  }
+
   const openai = new OpenAI({ apiKey: deps.openaiApiKey });
 
   return {

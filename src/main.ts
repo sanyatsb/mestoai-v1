@@ -117,6 +117,7 @@ async function main(): Promise<void> {
     bot,
     adminChatId: env.ADMIN_CHAT_ID,
     logger,
+    enabled: env.FEATURE_MODERATION,
   });
   const userReports = createUserReportsService({
     reports: userReportsRepo,
