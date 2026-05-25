@@ -13,9 +13,12 @@
 
 import { Bot } from 'grammy';
 import { env } from '../config.js';
+import { aboutComposer } from './composers/about.js';
 import { chatComposer } from './composers/chat.js';
 import { documentComposer } from './composers/document.js';
+import { groupComposer } from './composers/group.js';
 import { helpComposer } from './composers/help.js';
+import { langComposer } from './composers/lang.js';
 import { newComposer } from './composers/new.js';
 import { personaComposer } from './composers/persona.js';
 import { startComposer } from './composers/start.js';
@@ -35,15 +38,19 @@ export function createBot(services: BotServices): Bot<MyContext> {
   bot.use(i18nMiddleware);
   bot.use(authMiddleware);
 
-  // ---- command + callback composers (run BEFORE chat catch-all) ----
+  // ---- command + callback composers (run BEFORE catch-alls) ----
   bot.use(startComposer);
   bot.use(helpComposer);
+  bot.use(aboutComposer);
   bot.use(newComposer);
   bot.use(personaComposer);
   bot.use(voiceComposer);
   bot.use(documentComposer);
+  bot.use(langComposer);
 
-  // ---- catch-all for plain text in private chats ----
+  // ---- catch-alls. Order matters: groups first (chatType-scoped) so we
+  // don't accidentally run the private chat handler for group messages.
+  bot.use(groupComposer);
   bot.use(chatComposer);
 
   // Generic safety net so one bad update doesn't crash polling/webhook.

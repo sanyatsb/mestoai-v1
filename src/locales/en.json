@@ -1,6 +1,7 @@
 {
   "welcome.text": "Hi! I'm Gonka Bot, an AI assistant powered by Kimi K2.6 on the Gonka decentralized network. Just send me a message to start chatting.",
-  "help.text": "Available commands:\n/start — restart the bot\n/help — show this message\n/new — clear the current conversation and start fresh\n/persona — switch persona\n/voice — toggle voice replies",
+  "help.text": "Available commands:\n/start — restart the bot\n/help — show this message\n/new — clear the current conversation and start fresh\n/persona — switch persona\n/voice — toggle voice replies\n/lang — change interface language\n/about — about the bot",
+  "about.text": "Gonka Bot v{version}. Powered by Kimi K2.6 on the Gonka decentralized network. Free, no signup. Learn more: gonka.ai",
   "rate_limit.text": "Daily limit reached ({current}/{limit}). Try again in ~{hours}h.",
   "rate_limit.voice": "Voice limit reached. Try again in ~{hours}h.",
   "rate_limit.document": "Document limit reached. Try again in ~{hours}h.",
@@ -43,5 +44,8 @@
   "main_menu.chat": "💬 Just chat",
   "main_menu.document": "📄 Upload document",
   "main_menu.persona": "🎭 Pick persona",
-  "main_menu.about": "ℹ️ About"
+  "main_menu.about": "ℹ️ About",
+  "lang.choose": "Pick your interface language:",
+  "lang.selected": "Interface language switched to {lang}.",
+  "group.must_start_dm_first": "Please DM me first and accept the terms: {botLink}"
 }

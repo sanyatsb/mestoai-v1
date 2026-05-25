@@ -25,11 +25,10 @@ function loadLocale(name: SupportedLang): Locale {
 const LOCALES: Record<SupportedLang, Locale> = {
   en: loadLocale('en'),
   ru: loadLocale('ru'),
-  // Week 5 will fill the rest with full translations; for now fall back to en.
-  es: {},
-  ar: {},
-  zh: {},
-  de: {},
+  es: loadLocale('es'),
+  ar: loadLocale('ar'),
+  zh: loadLocale('zh'),
+  de: loadLocale('de'),
 };
 
 const SUPPORTED: ReadonlySet<SupportedLang> = new Set(['en', 'ru', 'es', 'ar', 'zh', 'de']);
