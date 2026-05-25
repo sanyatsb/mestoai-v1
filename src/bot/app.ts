@@ -14,6 +14,7 @@
 import { Bot } from 'grammy';
 import { env } from '../config.js';
 import { chatComposer } from './composers/chat.js';
+import { documentComposer } from './composers/document.js';
 import { helpComposer } from './composers/help.js';
 import { newComposer } from './composers/new.js';
 import { personaComposer } from './composers/persona.js';
@@ -40,6 +41,7 @@ export function createBot(services: BotServices): Bot<MyContext> {
   bot.use(newComposer);
   bot.use(personaComposer);
   bot.use(voiceComposer);
+  bot.use(documentComposer);
 
   // ---- catch-all for plain text in private chats ----
   bot.use(chatComposer);

@@ -44,6 +44,15 @@ export interface Tokenizer {
   estimate(text: string): number;
 }
 
+// ===== Document extraction result =====
+// Shared between DocumentService and composers/document.ts.
+
+export interface DocumentText {
+  text: string;
+  pages: number;
+  tokensEstimate: number;
+}
+
 // ===== Logger alias =====
 
 export type Logger = PinoLogger;

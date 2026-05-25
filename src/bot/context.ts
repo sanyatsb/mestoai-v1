@@ -11,6 +11,7 @@
 import type { Context, SessionFlavor } from 'grammy';
 import type { User } from '../db/schema.js';
 import type { ConversationService } from '../services/conversation.js';
+import type { DocumentService } from '../services/document.js';
 import type { GonkaClient } from '../services/gonka-client.js';
 import type { I18nService } from '../services/i18n.js';
 import type { PersonaService } from '../services/persona.js';
@@ -40,6 +41,7 @@ export interface BotServices {
   i18n: I18nService;
   persona: PersonaService;
   voice: VoiceService;
+  document: DocumentService;
 }
 
 export interface CustomCtx {

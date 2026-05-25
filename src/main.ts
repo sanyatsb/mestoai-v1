@@ -13,6 +13,7 @@ import { createPersonasRepository } from './db/repositories/personas.js';
 import { createUsersRepository } from './db/repositories/users.js';
 import { createServer } from './http/server.js';
 import { createConversationService } from './services/conversation.js';
+import { createDocumentService } from './services/document.js';
 import { createGonkaClient } from './services/gonka-client.js';
 import { createI18nService } from './services/i18n.js';
 import { createPersonaService } from './services/persona.js';
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     whisperModel: env.OPENAI_WHISPER_MODEL,
     logger,
   });
+  const document = createDocumentService({ tokenizer, logger });
 
   const services: BotServices = {
     gonka,
@@ -83,6 +85,7 @@ async function main(): Promise<void> {
     i18n,
     persona,
     voice,
+    document,
   };
 
   // ---- bot ----
