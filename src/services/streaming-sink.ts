@@ -172,10 +172,21 @@ export function createStreamingEditSink(opts: StreamingEditSinkOptions): Streami
       lastShown = clipped;
       lastEditAt = Date.now();
     } catch (e) {
-      // 400 "message is not modified" / "message to edit not found" /
-      // 429 "Too Many Requests" — log and ignore. Next push will retry.
+      // 400 "message is not modified" is harmless — happens when commit
+      // races with a trailing throttled edit and both try to set the same
+      // text. 400 "message to edit not found" / 429 "Too Many Requests"
+      // we also swallow; the next push() will retry.
+      if (isMessageNotModified(e)) return;
       ctx.logger.debug({ err: e }, 'stream_edit_skipped');
     }
+  };
+
+  const isMessageNotModified = (e: unknown): boolean => {
+    const msg =
+      (e as { description?: string; message?: string } | null)?.description ??
+      (e as { message?: string } | null)?.message ??
+      '';
+    return msg.includes('message is not modified');
   };
 
   const maybeEdit = async (): Promise<void> => {
@@ -215,7 +226,11 @@ export function createStreamingEditSink(opts: StreamingEditSinkOptions): Streami
             await ctx.api.editMessageText(chatId, id, clipped);
             lastShown = clipped;
           } catch (e) {
-            ctx.logger.warn({ err: e }, 'stream_commit_edit_failed');
+            // Same race as in editNow — commit may collide with a trailing
+            // throttled edit and Telegram returns 400 "not modified".
+            if (!isMessageNotModified(e)) {
+              ctx.logger.warn({ err: e }, 'stream_commit_edit_failed');
+            }
           }
         }
       }

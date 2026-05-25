@@ -33,20 +33,10 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
   const user = ctx.user;
   if (!user) return;
 
-  // [AUDIT-C9] DM-first ToS gate. Once Week 7A wires the real ToS flow we
-  // can check user.tosAcceptedAt here too — for now any user the auth
-  // middleware created is allowed through, but we send the must_start_dm
-  // message if their DM ToS hasn't been accepted yet.
-  if (user.tosAcceptedAt == null) {
-    const replyMsgId = ctx.message?.message_id;
-    await ctx.reply(
-      ctx.t('group.must_start_dm_first', {
-        botLink: `https://t.me/${env.BOT_USERNAME}`,
-      }),
-      replyMsgId != null ? { reply_parameters: { message_id: replyMsgId } } : undefined,
-    );
-    return;
-  }
+  // NOTE: DM-first ToS gate intentionally removed for now — group members
+  // should be able to invoke the bot without an explicit /start in DM
+  // first. Re-add `if (user.tosAcceptedAt == null) reply(group.must_start_dm_first)`
+  // here once we want to require DM ToS before any group activity.
 
   const msg = ctx.message;
   if (!msg) return;
