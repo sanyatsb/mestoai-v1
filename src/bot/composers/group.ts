@@ -104,11 +104,15 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
   // chat itself.
   const sink = createTypingIndicatorSink({ ctx, replyToMessageId: msg.message_id });
   let accumulated = '';
+  let finalUsage: { tokensInput: number; tokensOutput: number } | null = null;
 
   try {
     for await (const chunk of ctx.services.gonka.chatStream({ messages: llmMessages })) {
       accumulated += chunk.delta;
       if (chunk.delta) await sink.push(chunk.delta);
+      if (chunk.done && chunk.tokensInput != null && chunk.tokensOutput != null) {
+        finalUsage = { tokensInput: chunk.tokensInput, tokensOutput: chunk.tokensOutput };
+      }
     }
   } catch (e) {
     await sink.abort();
@@ -152,4 +156,15 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
 
   // No appendMessage — group turns are stateless in MVP [AUDIT-P5].
   // No voice output — never in groups [AUDIT-N3].
+
+  // [AUDIT-X14] Cost tracking even for stateless group turns — the spend
+  // still hits our gateway budget.
+  if (finalUsage) {
+    await ctx.services.cost.trackRequest({
+      userId: user.id as never,
+      kind: 'text',
+      tokensInput: finalUsage.tokensInput,
+      tokensOutput: finalUsage.tokensOutput,
+    });
+  }
 });

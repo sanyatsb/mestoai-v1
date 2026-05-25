@@ -11,7 +11,7 @@
 // services that need bot.api (notifyAdmin from moderation + user-reports)
 // can be built between the two steps without a circular dependency.
 
-import { Bot } from 'grammy';
+import { Bot, type Composer } from 'grammy';
 import { env } from '../config.js';
 import { aboutComposer } from './composers/about.js';
 import { chatComposer } from './composers/chat.js';
@@ -28,6 +28,7 @@ import { voiceComposer } from './composers/voice.js';
 import type { BotServices, MyContext } from './context.js';
 import { authMiddleware } from './middlewares/auth.js';
 import { i18nMiddleware } from './middlewares/i18n.js';
+import { killSwitchMiddleware } from './middlewares/kill-switch.js';
 import { loggingMiddleware } from './middlewares/logging.js';
 import { createServicesInjector } from './middlewares/services-injector.js';
 
@@ -40,15 +41,28 @@ export function createBotInstance(): Bot<MyContext> {
  * Attach middleware + composers. Call AFTER services that depend on
  * bot.api (e.g. moderation/userReports for admin notifications) have been
  * constructed using the bot instance returned by createBotInstance.
+ *
+ * adminComposer is built in main.ts because it needs a direct Redis handle
+ * for /kill / /unkill — we don't want to expose Redis through ctx.services.
  */
-export function attachComposers(bot: Bot<MyContext>, services: BotServices): void {
-  // ---- middleware order ----
+export function attachComposers(
+  bot: Bot<MyContext>,
+  services: BotServices,
+  adminComposer: Composer<MyContext>,
+): void {
+  // ---- middleware order [AUDIT-X10] ----
   bot.use(loggingMiddleware);
   bot.use(createServicesInjector(services));
   bot.use(i18nMiddleware);
   bot.use(authMiddleware);
+  bot.use(killSwitchMiddleware);
 
-  // ---- command + callback composers (run BEFORE catch-alls) ----
+  // Admin commands FIRST so they bypass any later rate-limit / kill paths
+  // (kill-switch already exempts admins above, but registering admin early
+  // also makes /unkill resilient if a future change reorders things).
+  bot.use(adminComposer);
+
+  // ---- onboarding + commands ----
   bot.use(startComposer);
   bot.use(helpComposer);
   bot.use(aboutComposer);

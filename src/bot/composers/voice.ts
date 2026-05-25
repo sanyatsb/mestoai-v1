@@ -83,6 +83,15 @@ voiceComposer.chatType('private').on(['message:voice', 'message:audio'], async (
     return;
   }
 
+  // [AUDIT-X14] Count the voice message itself in usage stats. The text
+  // turn that follows is tracked separately inside runTextPipeline.
+  await ctx.services.cost.trackRequest({
+    userId: user.id as never,
+    kind: 'voice',
+    tokensInput: 0,
+    tokensOutput: 0,
+  });
+
   // Echo back so the user can confirm Whisper heard them correctly.
   await ctx.reply(`📝 ${transcribed.value}`, {
     reply_parameters: { message_id: ctx.message?.message_id ?? 0 },

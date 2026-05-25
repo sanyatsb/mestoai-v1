@@ -136,6 +136,14 @@ documentComposer.chatType('private').on('message:document', async (ctx) => {
   });
   await ctx.services.users.update(user.id, { activeConversationId: conv.id as number });
 
+  // [AUDIT-X14] Count the document upload in usage stats.
+  await ctx.services.cost.trackRequest({
+    userId: user.id as never,
+    kind: 'document',
+    tokensInput: 0,
+    tokensOutput: 0,
+  });
+
   await ctx.reply(
     ctx.t('document.replaced_context', {
       pages,

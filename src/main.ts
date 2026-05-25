@@ -4,6 +4,7 @@
 import { serve } from '@hono/node-server';
 import { Redis } from 'ioredis';
 import { attachComposers, createBotInstance } from './bot/app.js';
+import { createAdminComposer } from './bot/composers/admin.js';
 import type { BotServices } from './bot/context.js';
 import { env } from './config.js';
 import { createDb } from './db/client.js';
@@ -11,11 +12,14 @@ import { createAuditLogRepository } from './db/repositories/audit-log.js';
 import { createConversationsRepository } from './db/repositories/conversations.js';
 import { createMessagesRepository } from './db/repositories/messages.js';
 import { createPersonasRepository } from './db/repositories/personas.js';
+import { createUsageStatsRepository } from './db/repositories/usage-stats.js';
 import { createUserReportsRepository } from './db/repositories/user-reports.js';
 import { createUsersRepository } from './db/repositories/users.js';
 import { createServer } from './http/server.js';
 import { createBlacklistChecker } from './services/blacklist-checker.js';
 import { createConversationService } from './services/conversation.js';
+import { createCostTracker } from './services/cost-tracker.js';
+import { registerCrons } from './services/crons.js';
 import { createDocumentService } from './services/document.js';
 import { createGonkaClient } from './services/gonka-client.js';
 import { createI18nService } from './services/i18n.js';
@@ -47,6 +51,7 @@ async function main(): Promise<void> {
   const personasRepo = createPersonasRepository(dbHandle.db);
   const auditLogRepo = createAuditLogRepository(dbHandle.db);
   const userReportsRepo = createUserReportsRepository(dbHandle.db);
+  const usageStatsRepo = createUsageStatsRepository(dbHandle.db);
 
   // ---- services ----
   const tokenizer = createTokenizer();
@@ -119,6 +124,19 @@ async function main(): Promise<void> {
     adminChatId: env.ADMIN_CHAT_ID,
     logger,
   });
+  const cost = createCostTracker({
+    usageStats: usageStatsRepo,
+    redis,
+    bot,
+    config: {
+      dailyBudgetUsd: env.DAILY_BUDGET_USD,
+      alertThresholdUsd: env.COST_ALERT_THRESHOLD_USD,
+      costPerInputToken: env.COST_PER_INPUT_TOKEN_USD,
+      costPerOutputToken: env.COST_PER_OUTPUT_TOKEN_USD,
+      adminChatId: env.ADMIN_CHAT_ID,
+    },
+    logger,
+  });
 
   const services: BotServices = {
     gonka,
@@ -132,13 +150,22 @@ async function main(): Promise<void> {
     document,
     moderation,
     userReports,
+    cost,
   };
+
+  // Admin composer needs the raw Redis handle for /kill / /unkill (it
+  // toggles the same key CostTracker reads from). Built here so we don't
+  // expose Redis through ctx.services.
+  const adminComposer = createAdminComposer(redis);
 
   // Now that services are built, install composers + middlewares onto the
   // bot instance we created above and init the bot's API metadata.
-  attachComposers(bot, services);
+  attachComposers(bot, services, adminComposer);
   await bot.init();
   logger.info({ botUsername: bot.botInfo.username }, 'bot_initialized');
+
+  // [AUDIT-L11] node-cron tasks (audit-log GDPR retention).
+  registerCrons({ auditLog: auditLogRepo, logger });
 
   // ---- http ----
   const app = createServer({

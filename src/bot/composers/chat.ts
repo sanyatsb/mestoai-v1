@@ -43,7 +43,8 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     ctx.logger.error('chat_handler_without_user');
     return;
   }
-  const { gonka, rateLimit, conversation, tokenizer, persona, voice, moderation } = ctx.services;
+  const { gonka, rateLimit, conversation, tokenizer, persona, voice, moderation, cost } =
+    ctx.services;
 
   // [AUDIT-H4] counter increments even on reject — that's the design.
   const rl = await rateLimit.checkAndIncrement(user.id as never, 'text');
@@ -191,6 +192,17 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
         finalUsage.tokensOutput * env.COST_PER_OUTPUT_TOKEN_USD
       : null,
   });
+
+  // [AUDIT-X14] Cost tracking — single source of truth for daily totals,
+  // admin alerts, and the auto kill-switch on budget overrun.
+  if (finalUsage) {
+    await cost.trackRequest({
+      userId: user.id as never,
+      kind: 'text',
+      tokensInput: finalUsage.tokensInput,
+      tokensOutput: finalUsage.tokensOutput,
+    });
+  }
 
   // [AUDIT-N3] Voice output ONLY in private DMs, never groups. Also cap on
   // length — TTS for 4K-char essays is wasteful and Telegram has its own

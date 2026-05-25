@@ -11,6 +11,7 @@
 import type { Context, SessionFlavor } from 'grammy';
 import type { User } from '../db/schema.js';
 import type { ConversationService } from '../services/conversation.js';
+import type { CostTracker } from '../services/cost-tracker.js';
 import type { DocumentService } from '../services/document.js';
 import type { GonkaClient } from '../services/gonka-client.js';
 import type { I18nService } from '../services/i18n.js';
@@ -46,6 +47,7 @@ export interface BotServices {
   document: DocumentService;
   moderation: ModerationService;
   userReports: UserReportsService;
+  cost: CostTracker;
 }
 
 export interface CustomCtx {
