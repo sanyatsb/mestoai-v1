@@ -62,7 +62,9 @@ export interface GonkaClientConfig {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_RETRIES = 2;
-const DEFAULT_MAX_TOKENS = 4096;
+// Kimi-K2.6 on Gonka caps max_completion_tokens at 2048; sending higher
+// returns 4xx. Callers can override via opts.maxTokens up to that ceiling.
+const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TEMPERATURE = 0.7;
 
 // Minimal slice of the OpenAI streaming response we use.

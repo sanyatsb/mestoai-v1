@@ -51,6 +51,18 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
   const msg = ctx.message;
   if (!msg) return;
 
+  // Defense in depth: even with BotFather Privacy ON we double-check there's
+  // an actual @mention of this bot in the message before doing anything.
+  // If Privacy is somehow OFF, the bot would otherwise reply to EVERY
+  // message in the group — runaway cost + privacy disaster.
+  const lowerUsername = env.BOT_USERNAME.toLowerCase();
+  const mentionsBot = (msg.entities ?? []).some((e) => {
+    if (e.type !== 'mention') return false;
+    const slice = (msg.text ?? '').slice(e.offset, e.offset + e.length).toLowerCase();
+    return slice === `@${lowerUsername}`;
+  });
+  if (!mentionsBot) return; // silent — not addressed to us
+
   // Strip @mention / leading /command from the text. If nothing remains,
   // the user typed only "@bot" with no question — silently ignore.
   const userText = extractTextWithoutMention(msg, env.BOT_USERNAME);

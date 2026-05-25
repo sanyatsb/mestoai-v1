@@ -24,14 +24,20 @@ export function createServer(deps: ServerDeps): Hono {
   registerHealth(app);
   registerReady(app, deps.readiness);
 
-  // [AUDIT-C10] grammY validates X-Telegram-Bot-Api-Secret-Token header
-  // against env.WEBHOOK_SECRET. Caddy must forward this header (see Caddyfile).
-  app.post(
-    env.WEBHOOK_PATH,
-    webhookCallback(deps.bot, 'hono', {
-      secretToken: env.WEBHOOK_SECRET,
-    }),
-  );
+  // In development we run on long-polling — calling webhookCallback() here
+  // would overwrite bot.start to throw and break dev mode. The webhook
+  // route only exists in production / test, where Telegram POSTs to it.
+  //
+  // [AUDIT-C10] grammY validates the X-Telegram-Bot-Api-Secret-Token
+  // header inside webhookCallback. Caddy must forward this header.
+  if (env.NODE_ENV !== 'development') {
+    app.post(
+      env.WEBHOOK_PATH,
+      webhookCallback(deps.bot, 'hono', {
+        secretToken: env.WEBHOOK_SECRET,
+      }),
+    );
+  }
 
   app.notFound((c) => c.json({ error: 'not_found' }, 404));
 

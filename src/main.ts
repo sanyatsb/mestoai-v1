@@ -179,6 +179,12 @@ async function main(): Promise<void> {
 
   // ---- bot transport ----
   if (env.NODE_ENV === 'development') {
+    // grammY refuses to long-poll if a webhook is registered with Telegram.
+    // The flag persists across restarts (it lives on Telegram's side), so we
+    // always clear it before starting polling. drop_pending_updates flushes
+    // anything queued for the old webhook so a stale CSAM payload from
+    // testing yesterday doesn't replay on today's restart.
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
     bot.start({
       onStart: (botInfo) => logger.info({ username: botInfo.username }, 'polling_started'),
     });
