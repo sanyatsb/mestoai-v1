@@ -14,8 +14,10 @@ import type { ConversationService } from '../services/conversation.js';
 import type { DocumentService } from '../services/document.js';
 import type { GonkaClient } from '../services/gonka-client.js';
 import type { I18nService } from '../services/i18n.js';
+import type { ModerationService } from '../services/moderation.js';
 import type { PersonaService } from '../services/persona.js';
 import type { RateLimiter } from '../services/rate-limiter.js';
+import type { UserReportsService } from '../services/user-reports.js';
 import type { UsersService } from '../services/users.js';
 import type { VoiceService } from '../services/voice.js';
 import type { Logger, Tokenizer } from '../types.js';
@@ -42,6 +44,8 @@ export interface BotServices {
   persona: PersonaService;
   voice: VoiceService;
   document: DocumentService;
+  moderation: ModerationService;
+  userReports: UserReportsService;
 }
 
 export interface CustomCtx {

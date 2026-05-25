@@ -43,7 +43,7 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     ctx.logger.error('chat_handler_without_user');
     return;
   }
-  const { gonka, rateLimit, conversation, tokenizer, persona, voice } = ctx.services;
+  const { gonka, rateLimit, conversation, tokenizer, persona, voice, moderation } = ctx.services;
 
   // [AUDIT-H4] counter increments even on reject — that's the design.
   const rl = await rateLimit.checkAndIncrement(user.id as never, 'text');
@@ -63,7 +63,18 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     return;
   }
 
-  // Week 6 will add input moderation here.
+  // [AUDIT-C7] Input moderation BEFORE we touch Kimi / store the message.
+  // If banFired we don't need a separate message — the auth middleware
+  // already blocks the next update from a banned user.
+  const modIn = await moderation.checkInput(text, user.id as never, ctx.lang);
+  if (modIn.decision === 'block') {
+    await ctx.reply(
+      modIn.triggeredCategories.includes('selfHarm')
+        ? ctx.t('moderation.self_harm_resources')
+        : ctx.t('moderation.input_blocked'),
+    );
+    return;
+  }
 
   const conv = await conversation.getOrCreateActive(user.id as never);
 
@@ -144,7 +155,15 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     return;
   }
 
-  // Week 6: output moderation goes RIGHT HERE — before sink.commit.
+  // [AUDIT-C7] Output moderation BEFORE revealing the buffered text. The
+  // sink has been streaming a typing-indicator only — abort() leaves no
+  // visible bot message.
+  const modOut = await moderation.checkOutput(accumulated, user.id as never, ctx.lang);
+  if (modOut.decision === 'block') {
+    await sink.abort();
+    await ctx.reply(ctx.t('moderation.output_blocked'));
+    return;
+  }
 
   // [AUDIT-A4] Telegram caps messages at 4096 chars.
   const parts = splitForTelegram(accumulated, 4000);

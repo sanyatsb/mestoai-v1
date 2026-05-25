@@ -78,7 +78,14 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
     return;
   }
 
-  // Week 6 will add input moderation here.
+  // [AUDIT-C7] Input moderation BEFORE we call Kimi.
+  const modIn = await ctx.services.moderation.checkInput(userText, user.id as never, ctx.lang);
+  if (modIn.decision === 'block') {
+    await ctx.reply(ctx.t('moderation.input_blocked'), {
+      reply_parameters: { message_id: msg.message_id },
+    });
+    return;
+  }
 
   // Single-turn: just the default persona, no history.
   const defaultPersona = await ctx.services.persona.getDefault();
@@ -120,7 +127,15 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
     return;
   }
 
-  // Week 6: output moderation goes RIGHT HERE — before sink.commit.
+  // [AUDIT-C7] Output moderation BEFORE we reveal anything to the group.
+  const modOut = await ctx.services.moderation.checkOutput(accumulated, user.id as never, ctx.lang);
+  if (modOut.decision === 'block') {
+    await sink.abort();
+    await ctx.reply(ctx.t('moderation.output_blocked'), {
+      reply_parameters: { message_id: msg.message_id },
+    });
+    return;
+  }
 
   // [AUDIT-A4] Split long replies. First chunk replaces the typing
   // indicator (as a reply to the user); follow-ups are regular replies

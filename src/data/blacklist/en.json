@@ -1,0 +1,4 @@
+{
+  "_comment": "MVP placeholder blacklist. In production replace with LDNOOBW (https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words) or equivalent curated list. Matched with word boundaries, case-insensitive.",
+  "words": ["csam", "child porn", "child sexual abuse"]
+}

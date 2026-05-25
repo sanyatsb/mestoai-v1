@@ -110,7 +110,17 @@ documentComposer.chatType('private').on('message:document', async (ctx) => {
     return;
   }
 
-  // [AUDIT-M10] Week 6 will moderate the first 50K chars right here.
+  // [AUDIT-M10] Moderate the first 50K chars. Full-text chunked moderation
+  // is Phase 2; the audit log records that this was a prefix-only check.
+  const modResult = await ctx.services.moderation.checkInput(
+    text.slice(0, 50_000),
+    user.id as never,
+    ctx.lang,
+  );
+  if (modResult.decision === 'block') {
+    await ctx.reply(ctx.t('moderation.document_blocked'));
+    return;
+  }
 
   // [AUDIT-C8, N4] Uploading a doc always starts a fresh conversation. The
   // transactional startNew protects the partial unique index even if the

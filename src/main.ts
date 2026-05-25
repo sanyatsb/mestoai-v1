@@ -3,21 +3,27 @@
 
 import { serve } from '@hono/node-server';
 import { Redis } from 'ioredis';
-import { createBot } from './bot/app.js';
+import { attachComposers, createBotInstance } from './bot/app.js';
 import type { BotServices } from './bot/context.js';
 import { env } from './config.js';
 import { createDb } from './db/client.js';
+import { createAuditLogRepository } from './db/repositories/audit-log.js';
 import { createConversationsRepository } from './db/repositories/conversations.js';
 import { createMessagesRepository } from './db/repositories/messages.js';
 import { createPersonasRepository } from './db/repositories/personas.js';
+import { createUserReportsRepository } from './db/repositories/user-reports.js';
 import { createUsersRepository } from './db/repositories/users.js';
 import { createServer } from './http/server.js';
+import { createBlacklistChecker } from './services/blacklist-checker.js';
 import { createConversationService } from './services/conversation.js';
 import { createDocumentService } from './services/document.js';
 import { createGonkaClient } from './services/gonka-client.js';
 import { createI18nService } from './services/i18n.js';
+import { createJailbreakDetector } from './services/jailbreak-detector.js';
+import { createModerationService } from './services/moderation.js';
 import { createPersonaService } from './services/persona.js';
 import { createRateLimiter } from './services/rate-limiter.js';
+import { createUserReportsService } from './services/user-reports.js';
 import { createUsersService } from './services/users.js';
 import { createVoiceService } from './services/voice.js';
 import { logger } from './utils/logger.js';
@@ -39,11 +45,13 @@ async function main(): Promise<void> {
   const conversationsRepo = createConversationsRepository(dbHandle.db);
   const messagesRepo = createMessagesRepository(dbHandle.db);
   const personasRepo = createPersonasRepository(dbHandle.db);
+  const auditLogRepo = createAuditLogRepository(dbHandle.db);
+  const userReportsRepo = createUserReportsRepository(dbHandle.db);
 
   // ---- services ----
   const tokenizer = createTokenizer();
   const i18n = createI18nService(logger);
-  const users = createUsersService({ users: usersRepo, logger });
+  const users = createUsersService({ db: dbHandle.db, users: usersRepo, logger });
   const conversation = createConversationService({
     db: dbHandle.db,
     conversations: conversationsRepo,
@@ -76,6 +84,42 @@ async function main(): Promise<void> {
   });
   const document = createDocumentService({ tokenizer, logger });
 
+  // Bot instance is needed by moderation + reports services so they can DM
+  // the admin chat. We build it first (no composers attached yet), construct
+  // the services that use bot.api, then attach composers via attachComposers
+  // below.
+  const bot = createBotInstance();
+
+  const jailbreak = createJailbreakDetector();
+  const blacklist = createBlacklistChecker(logger);
+  const moderation = createModerationService({
+    openaiApiKey: env.OPENAI_API_KEY,
+    moderationModel: env.OPENAI_MODERATION_MODEL,
+    jailbreak,
+    blacklist,
+    users: usersRepo,
+    auditLog: auditLogRepo,
+    thresholds: {
+      sexualMinors: env.MOD_THRESHOLD_SEXUAL_MINORS,
+      harm: env.MOD_THRESHOLD_HARM,
+      violence: env.MOD_THRESHOLD_VIOLENCE,
+      hate: env.MOD_THRESHOLD_HATE,
+      selfHarm: env.MOD_THRESHOLD_SELF_HARM,
+      sexual: env.MOD_THRESHOLD_SEXUAL,
+    },
+    banFlagThreshold: env.USER_BAN_FLAG_THRESHOLD,
+    permabanFlagThreshold: env.USER_PERMABAN_FLAG_THRESHOLD,
+    bot,
+    adminChatId: env.ADMIN_CHAT_ID,
+    logger,
+  });
+  const userReports = createUserReportsService({
+    reports: userReportsRepo,
+    bot,
+    adminChatId: env.ADMIN_CHAT_ID,
+    logger,
+  });
+
   const services: BotServices = {
     gonka,
     conversation,
@@ -86,10 +130,13 @@ async function main(): Promise<void> {
     persona,
     voice,
     document,
+    moderation,
+    userReports,
   };
 
-  // ---- bot ----
-  const bot = createBot(services);
+  // Now that services are built, install composers + middlewares onto the
+  // bot instance we created above and init the bot's API metadata.
+  attachComposers(bot, services);
   await bot.init();
   logger.info({ botUsername: bot.botInfo.username }, 'bot_initialized');
 
