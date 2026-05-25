@@ -74,11 +74,11 @@ async function main(): Promise<void> {
     logger,
   });
   const gonka = createGonkaClient({
-    baseUrl: env.GONKA_GATEWAY_URL,
-    apiKey: env.GONKA_API_KEY,
-    model: env.GONKA_MODEL,
-    timeoutMs: env.GONKA_TIMEOUT_MS,
-    maxRetries: env.GONKA_MAX_RETRIES,
+    baseUrl: env.LLM_GATEWAY_URL,
+    apiKey: env.LLM_API_KEY,
+    model: env.LLM_MODEL,
+    timeoutMs: env.LLM_TIMEOUT_MS,
+    maxRetries: env.LLM_MAX_RETRIES,
     logger,
   });
   const persona = createPersonaService({ personas: personasRepo, logger });

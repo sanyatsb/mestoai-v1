@@ -26,12 +26,12 @@ const EnvSchema = z.object({
   WEBHOOK_SECRET: z.string().min(16),
   WEBHOOK_PATH: z.string().default('/webhook'),
 
-  // Gonka
-  GONKA_GATEWAY_URL: z.string().url(),
-  GONKA_API_KEY: z.string().min(1),
-  GONKA_MODEL: z.string().default('Kimi-K2.6'),
-  GONKA_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
-  GONKA_MAX_RETRIES: z.coerce.number().int().nonnegative().default(2),
+  // LLM gateway — OpenAI-compatible (OpenRouter / Gonka / OpenAI direct etc).
+  LLM_GATEWAY_URL: z.string().url(),
+  LLM_API_KEY: z.string().min(1),
+  LLM_MODEL: z.string().default('google/gemini-2.0-flash-exp:free'),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  LLM_MAX_RETRIES: z.coerce.number().int().nonnegative().default(2),
 
   // OpenAI
   OPENAI_API_KEY: z.string().min(1),
@@ -88,6 +88,9 @@ const EnvSchema = z.object({
   FEATURE_DOCUMENTS: boolFromEnv.default('true'),
   FEATURE_GROUPS: boolFromEnv.default('true'),
   KILL_SWITCH: boolFromEnv.default('false'),
+  // Toggle between TypingIndicatorSink (false — [AUDIT-C7] safe) and
+  // StreamingEditSink (true — UX win on fast models, see streaming-sink.ts).
+  STREAMING_USE_EDIT: boolFromEnv.default('true'),
 
   // Context
   CONTEXT_WINDOW_TOKENS: z.coerce.number().int().positive().default(256_000),

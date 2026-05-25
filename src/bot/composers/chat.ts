@@ -3,20 +3,28 @@
 // runTextPipeline is the reusable core: voice composer hands a transcribed
 // string straight back into it so we don't fork the pipeline.
 //
-// Week 3 additions vs Week 2:
-//   - PersonaService renders the system prompt (with ALWAYS respond in:
-//     [AUDIT-L14]) and the active persona is loaded from the DB row.
-//   - Voice output (Edge-TTS) when user.voiceOutputEnabled is on and we're
-//     in a private chat [AUDIT-N3]. TTS failures are non-fatal — text reply
-//     still goes out.
+// Streaming UX:
+//   - With STREAMING_USE_EDIT=true (default): we send a placeholder and edit
+//     it via editMessageText every ~700ms as new chunks arrive. Output
+//     moderation runs AFTER the stream completes; if it blocks, we overwrite
+//     the message body with t('moderation.output_blocked'). Safe for fast
+//     models (Gemini Flash, 1-3 s end-to-end); avoid on slow reasoners.
+//   - With STREAMING_USE_EDIT=false: hidden buffer (TypingIndicatorSink),
+//     output moderation runs before the user sees anything. Original
+//     [AUDIT-C7] behaviour.
 //
-// Week 6 will add input/output moderation; Week 7A wires cost-tracker.
+// Phase timing: every external call is bracketed by `phaseStart()` and its
+// duration logged with `phase: <name>` so dashboards can spot slow stages.
 
 import { Composer, InputFile } from 'grammy';
 import { env } from '../../config.js';
 import type { ChatMessage } from '../../services/conversation.js';
 import type { Persona } from '../../services/persona.js';
-import { createTypingIndicatorSink } from '../../services/streaming-sink.js';
+import {
+  type StreamingTextSink,
+  createStreamingEditSink,
+  createTypingIndicatorSink,
+} from '../../services/streaming-sink.js';
 import { toPersonaId } from '../../utils/ids.js';
 import { splitForTelegram } from '../../utils/telegram-split.js';
 import type { MyContext } from '../context.js';
@@ -33,6 +41,14 @@ chatComposer.chatType('private').on('message:text', async (ctx, next) => {
   await runTextPipeline(ctx, ctx.message.text);
 });
 
+/** Wall-clock helper for phase timing. */
+function phaseStart() {
+  return Date.now();
+}
+function phaseMs(start: number): number {
+  return Date.now() - start;
+}
+
 /**
  * Shared text pipeline. Used directly for text messages and by voice
  * composer after transcription.
@@ -45,6 +61,7 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
   }
   const { gonka, rateLimit, conversation, tokenizer, persona, voice, moderation, cost } =
     ctx.services;
+  const pipelineStart = Date.now();
 
   // [AUDIT-H4] counter increments even on reject — that's the design.
   const rl = await rateLimit.checkAndIncrement(user.id as never, 'text');
@@ -64,10 +81,18 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     return;
   }
 
-  // [AUDIT-C7] Input moderation BEFORE we touch Kimi / store the message.
-  // If banFired we don't need a separate message — the auth middleware
-  // already blocks the next update from a banned user.
+  // --- input moderation ---
+  let phase = phaseStart();
   const modIn = await moderation.checkInput(text, user.id as never, ctx.lang);
+  ctx.logger.info(
+    {
+      phase: 'input_moderation',
+      latencyMs: phaseMs(phase),
+      decision: modIn.decision,
+      flagged: modIn.flagged,
+    },
+    'phase_timing',
+  );
   if (modIn.decision === 'block') {
     await ctx.reply(
       modIn.triggeredCategories.includes('selfHarm')
@@ -77,18 +102,16 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     return;
   }
 
+  // --- history load + persist user turn ---
+  phase = phaseStart();
   const conv = await conversation.getOrCreateActive(user.id as never);
-
   await conversation.appendMessage({
     conversationId: conv.id,
     role: 'user',
     content: text,
     ...(ctx.message?.message_id !== undefined ? { tgMessageId: ctx.message.message_id } : {}),
   });
-
-  // Resolve active persona: conversation override → user default → DB default.
   const activePersona = await resolveActivePersona(ctx, conv.personaId, user.activePersonaId);
-
   const systemPrompt = persona.renderSystemPrompt({
     persona: activePersona,
     userLang: ctx.lang,
@@ -96,13 +119,22 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     ...(conv.documentName ? { documentName: conv.documentName } : {}),
   });
   const systemTokens = tokenizer.estimate(systemPrompt);
-
   const historyResult = await conversation.getMessagesForLlm({
     conversationId: conv.id,
     reservedForSystem: systemTokens,
   });
+  ctx.logger.info(
+    {
+      phase: 'history_load',
+      latencyMs: phaseMs(phase),
+      convId: conv.id,
+      systemTokens,
+      historyLen: historyResult.ok ? historyResult.value.length : 0,
+    },
+    'phase_timing',
+  );
   if (!historyResult.ok) {
-    // [AUDIT-A5] Document overflow — possible from Week 4 onward.
+    // [AUDIT-A5] Document overflow.
     await ctx.reply(ctx.t('error.internal'));
     ctx.logger.error({ err: historyResult.error }, 'context_overflow');
     return;
@@ -113,15 +145,19 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     ...historyResult.value,
   ];
 
-  // [AUDIT-C7] Stream into hidden sink so output moderation (Week 6) can
-  // veto the response before the user sees a single character.
-  const sink = createTypingIndicatorSink({ ctx });
+  // --- LLM streaming ---
+  const sink = createSinkForCtx(ctx);
   let accumulated = '';
   let finalUsage: { tokensInput: number; tokensOutput: number; usageDegraded: boolean } | null =
     null;
+  phase = phaseStart();
+  let firstTokenAtMs: number | null = null;
 
   try {
     for await (const chunk of gonka.chatStream({ messages: llmMessages })) {
+      if (chunk.delta && firstTokenAtMs == null) {
+        firstTokenAtMs = phaseMs(phase);
+      }
       accumulated += chunk.delta;
       if (chunk.delta) await sink.push(chunk.delta);
       if (chunk.done) {
@@ -132,8 +168,7 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
             usageDegraded: false,
           };
         } else {
-          // [AUDIT-L13] Fallback: estimate via tiktoken and flag the metric.
-          ctx.logger.warn({ userId: user.id }, 'gateway_usage_missing_falling_back');
+          // [AUDIT-L13] usage missing — tiktoken fallback.
           finalUsage = {
             tokensInput: tokenizer.estimate(JSON.stringify(llmMessages)),
             tokensOutput: tokenizer.estimate(accumulated),
@@ -144,28 +179,53 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
     }
   } catch (e) {
     await sink.abort();
-    ctx.logger.error({ err: e, userId: user.id }, 'gonka_stream_failed');
+    ctx.logger.error({ err: e, userId: user.id }, 'llm_stream_failed');
     await ctx.reply(ctx.t('error.service_unavailable'));
     return;
   }
+  ctx.logger.info(
+    {
+      phase: 'llm_stream',
+      latencyMs: phaseMs(phase),
+      ttftMs: firstTokenAtMs,
+      chars: accumulated.length,
+      tokensInput: finalUsage?.tokensInput,
+      tokensOutput: finalUsage?.tokensOutput,
+      usageDegraded: finalUsage?.usageDegraded ?? null,
+    },
+    'phase_timing',
+  );
 
   if (accumulated.length === 0) {
     await sink.abort();
-    ctx.logger.warn({ userId: user.id }, 'gonka_returned_empty_response');
+    ctx.logger.warn({ userId: user.id }, 'llm_returned_empty_response');
     await ctx.reply(ctx.t('error.service_unavailable'));
     return;
   }
 
-  // [AUDIT-C7] Output moderation BEFORE revealing the buffered text. The
-  // sink has been streaming a typing-indicator only — abort() leaves no
-  // visible bot message.
+  // --- output moderation ---
+  phase = phaseStart();
   const modOut = await moderation.checkOutput(accumulated, user.id as never, ctx.lang);
+  ctx.logger.info(
+    {
+      phase: 'output_moderation',
+      latencyMs: phaseMs(phase),
+      decision: modOut.decision,
+      flagged: modOut.flagged,
+    },
+    'phase_timing',
+  );
   if (modOut.decision === 'block') {
+    // For the streaming-edit sink the user has already seen partial output;
+    // replaceWith() overwrites the message body. For typing-only sink this
+    // call is a no-op and the reply below carries the message.
+    await sink.replaceWith(ctx.t('moderation.output_blocked'));
     await sink.abort();
-    await ctx.reply(ctx.t('moderation.output_blocked'));
     return;
   }
 
+  // --- commit final + spill long replies ---
+  phase = phaseStart();
   // [AUDIT-A4] Telegram caps messages at 4096 chars.
   const parts = splitForTelegram(accumulated, 4000);
   let firstTgMessageId: number | null = null;
@@ -179,7 +239,13 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
       firstTgMessageId ??= sent.message_id;
     }
   }
+  ctx.logger.info(
+    { phase: 'commit', latencyMs: phaseMs(phase), parts: parts.length },
+    'phase_timing',
+  );
 
+  // --- persist assistant turn ---
+  phase = phaseStart();
   await conversation.appendMessage({
     conversationId: conv.id,
     role: 'assistant',
@@ -192,9 +258,6 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
         finalUsage.tokensOutput * env.COST_PER_OUTPUT_TOKEN_USD
       : null,
   });
-
-  // [AUDIT-X14] Cost tracking — single source of truth for daily totals,
-  // admin alerts, and the auto kill-switch on budget overrun.
   if (finalUsage) {
     await cost.trackRequest({
       userId: user.id as never,
@@ -203,12 +266,21 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
       tokensOutput: finalUsage.tokensOutput,
     });
   }
+  ctx.logger.info({ phase: 'persist', latencyMs: phaseMs(phase) }, 'phase_timing');
 
-  // [AUDIT-N3] Voice output ONLY in private DMs, never groups. Also cap on
-  // length — TTS for 4K-char essays is wasteful and Telegram has its own
-  // duration limits.
+  // --- optional voice output ---
   if (user.voiceOutputEnabled && ctx.chat?.type === 'private' && accumulated.length <= 2000) {
+    phase = phaseStart();
     const result = await voice.synthesize(accumulated, ctx.lang);
+    ctx.logger.info(
+      {
+        phase: 'voice_synth',
+        latencyMs: phaseMs(phase),
+        ok: result.ok,
+        bytes: result.ok ? result.value.byteLength : 0,
+      },
+      'phase_timing',
+    );
     if (result.ok) {
       try {
         await ctx.replyWithVoice(new InputFile(result.value, 'response.ogg'));
@@ -219,7 +291,25 @@ export async function runTextPipeline(ctx: MyContext, text: string): Promise<voi
       ctx.logger.warn({ err: result.error }, 'tts_failed_non_fatal');
     }
   }
+
+  ctx.logger.info({ phase: 'pipeline_total', latencyMs: phaseMs(pipelineStart) }, 'phase_timing');
 }
+
+function createSinkForCtx(ctx: MyContext, replyToMessageId?: number): StreamingTextSink {
+  if (env.STREAMING_USE_EDIT) {
+    return createStreamingEditSink({
+      ctx,
+      ...(replyToMessageId !== undefined ? { replyToMessageId } : {}),
+    });
+  }
+  return createTypingIndicatorSink({
+    ctx,
+    ...(replyToMessageId !== undefined ? { replyToMessageId } : {}),
+  });
+}
+
+/** Exported for the group composer to build its own sink with replyToMessageId. */
+export { createSinkForCtx };
 
 /**
  * Resolve which persona is active for this turn. Precedence:

@@ -18,10 +18,10 @@
 import { Composer } from 'grammy';
 import { env } from '../../config.js';
 import type { ChatMessage } from '../../services/conversation.js';
-import { createTypingIndicatorSink } from '../../services/streaming-sink.js';
 import { extractTextWithoutMention } from '../../utils/extract-mention.js';
 import { splitForTelegram } from '../../utils/telegram-split.js';
 import type { MyContext } from '../context.js';
+import { createSinkForCtx } from './chat.js';
 
 export const groupComposer = new Composer<MyContext>();
 
@@ -111,15 +111,18 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
     { role: 'user', content: userText },
   ];
 
-  // [AUDIT-N2] The sink replies to the user's original message so the
-  // group thread context is obvious. Typing indicator fires in the group
-  // chat itself.
-  const sink = createTypingIndicatorSink({ ctx, replyToMessageId: msg.message_id });
+  // [AUDIT-N2] Sink replies to the user's original message so the group
+  // thread context is obvious. Same sink type as DM — toggled via
+  // STREAMING_USE_EDIT (defined in chat composer).
+  const sink = createSinkForCtx(ctx, msg.message_id);
   let accumulated = '';
   let finalUsage: { tokensInput: number; tokensOutput: number } | null = null;
+  const llmStart = Date.now();
+  let firstTokenAtMs: number | null = null;
 
   try {
     for await (const chunk of ctx.services.gonka.chatStream({ messages: llmMessages })) {
+      if (chunk.delta && firstTokenAtMs == null) firstTokenAtMs = Date.now() - llmStart;
       accumulated += chunk.delta;
       if (chunk.delta) await sink.push(chunk.delta);
       if (chunk.done && chunk.tokensInput != null && chunk.tokensOutput != null) {
@@ -128,12 +131,24 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
     }
   } catch (e) {
     await sink.abort();
-    ctx.logger.error({ err: e, userId: user.id }, 'group_gonka_stream_failed');
+    ctx.logger.error({ err: e, userId: user.id }, 'group_llm_stream_failed');
     await ctx.reply(ctx.t('error.service_unavailable'), {
       reply_parameters: { message_id: msg.message_id },
     });
     return;
   }
+  ctx.logger.info(
+    {
+      phase: 'llm_stream',
+      latencyMs: Date.now() - llmStart,
+      ttftMs: firstTokenAtMs,
+      chars: accumulated.length,
+      tokensInput: finalUsage?.tokensInput,
+      tokensOutput: finalUsage?.tokensOutput,
+      surface: 'group',
+    },
+    'phase_timing',
+  );
 
   if (accumulated.length === 0) {
     await sink.abort();
@@ -143,19 +158,16 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
     return;
   }
 
-  // [AUDIT-C7] Output moderation BEFORE we reveal anything to the group.
+  // Output moderation; on flag the streaming-edit sink overwrites the body
+  // via replaceWith. Hidden-buffer sink just doesn't show anything.
   const modOut = await ctx.services.moderation.checkOutput(accumulated, user.id as never, ctx.lang);
   if (modOut.decision === 'block') {
+    await sink.replaceWith(ctx.t('moderation.output_blocked'));
     await sink.abort();
-    await ctx.reply(ctx.t('moderation.output_blocked'), {
-      reply_parameters: { message_id: msg.message_id },
-    });
     return;
   }
 
-  // [AUDIT-A4] Split long replies. First chunk replaces the typing
-  // indicator (as a reply to the user); follow-ups are regular replies
-  // to keep the thread visually anchored.
+  // [AUDIT-A4] Split long replies. First chunk commits via sink.
   const parts = splitForTelegram(accumulated, 4000);
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i] ?? '';
@@ -166,11 +178,8 @@ groupComposer.chatType(['group', 'supergroup']).on('message:text', async (ctx) =
     }
   }
 
-  // No appendMessage — group turns are stateless in MVP [AUDIT-P5].
-  // No voice output — never in groups [AUDIT-N3].
-
-  // [AUDIT-X14] Cost tracking even for stateless group turns — the spend
-  // still hits our gateway budget.
+  // [AUDIT-X14] Cost tracking for stateless group turns. [AUDIT-P5] No
+  // appendMessage. [AUDIT-N3] No voice output in groups.
   if (finalUsage) {
     await ctx.services.cost.trackRequest({
       userId: user.id as never,
