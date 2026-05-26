@@ -111,16 +111,29 @@ export function createTypingIndicatorSink(opts: TypingIndicatorSinkOptions): Str
 // ===== StreamingEditSink ======================================================
 
 export interface StreamingEditSinkOptions extends SinkOptions {
-  /** Minimum gap between editMessageText calls (Telegram global edit rate is ~30/sec). Default 700. */
+  /**
+   * Minimum gap between editMessageText calls. Telegram caps a single chat
+   * at ~20 messages/edits per minute, so anything below 3000ms eventually
+   * trips 429. Default 3000.
+   */
   throttleMs?: number;
   /** First chunk size to send before throttling kicks in. Default 1. */
   initialBurstChars?: number;
   /** Placeholder text shown before the first chunk arrives. Default "…". */
   placeholder?: string;
+  /**
+   * Stop editing the visible message after this many accumulated chars.
+   * Beyond this, push() still buffers content but the user sees "…(more
+   * incoming)" — the full reply is revealed in commit() via splitForTelegram.
+   * Telegram clips messages at 4096; we clip earlier so commit can fit the
+   * canonical text + maybe a "(part 1/N)" prefix later. Default 3500.
+   */
+  streamingCharCap?: number;
 }
 
-const DEFAULT_THROTTLE_MS = 700;
+const DEFAULT_THROTTLE_MS = 3000;
 const DEFAULT_PLACEHOLDER = '…';
+const DEFAULT_STREAMING_CHAR_CAP = 3500;
 
 /**
  * Real-time streaming via editMessageText. Sends a placeholder immediately,
@@ -137,6 +150,7 @@ export function createStreamingEditSink(opts: StreamingEditSinkOptions): Streami
   const { ctx } = opts;
   const throttleMs = opts.throttleMs ?? DEFAULT_THROTTLE_MS;
   const placeholder = opts.placeholder ?? DEFAULT_PLACEHOLDER;
+  const streamingCharCap = opts.streamingCharCap ?? DEFAULT_STREAMING_CHAR_CAP;
   const replyOpts =
     opts.replyToMessageId != null
       ? { reply_parameters: { message_id: opts.replyToMessageId } }
@@ -148,6 +162,10 @@ export function createStreamingEditSink(opts: StreamingEditSinkOptions): Streami
   let lastEditAt = 0;
   let editPending = false;
   let stopped = false;
+  // Once we cross streamingCharCap we stop sending edits to avoid the
+  // Telegram per-chat rate limit (~20 msgs/min). commit() then reveals
+  // the full canonical text in a single editMessageText.
+  let capped = false;
 
   const ensureMessage = async (): Promise<number> => {
     if (messageId != null) return messageId;
@@ -190,7 +208,13 @@ export function createStreamingEditSink(opts: StreamingEditSinkOptions): Streami
   };
 
   const maybeEdit = async (): Promise<void> => {
-    if (stopped || editPending) return;
+    if (stopped || editPending || capped) return;
+    if (accumulated.length >= streamingCharCap) {
+      // Show one final "incoming" hint, then stop editing until commit().
+      capped = true;
+      await editNow(`${accumulated.slice(0, streamingCharCap)}…`);
+      return;
+    }
     const sinceLast = Date.now() - lastEditAt;
     if (sinceLast >= throttleMs) {
       await editNow(accumulated);
